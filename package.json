@@ -1,0 +1,26 @@
+{
+  "name": "strace-parser",
+  "version": "0.0.1",
+  "description": "",
+  "main": "lib/index.js",
+  "typings": "./lib/index.d.ts",
+  "directories": {
+    "lib": "lib"
+  },
+  "scripts": {
+    "build": "rm -rf lib && tsc",
+    "start": "node lib/index.js",
+    "test": "jest --verbose"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/jest": "^25.2.3",
+    "@types/node": "^13.13.9",
+    "jest": "^26.0.1",
+    "ts-jest": "^26.1.0",
+    "ts-node": "^8.6.2",
+    "tsc": "^1.20150623.0",
+    "tslint": "^6.1.2",
+    "typescript": "^3.7.4"
+  }
+}
