@@ -1,82 +1,54 @@
+
+function decodeStraceHexString(encoded: string): string {
+    return encoded.replace(/\\x([0-9A-Fa-f]{2,4})/g, (data) => {
+        return String.fromCharCode(parseInt(data.slice(-2), 16));
+    });
+}
+
 type StraceFdType = {
     fd: number;
-    kind: 'TCP' | 'UNIX' | '???',
-    path?: string;
-    tcp?: { from: { address: string, port: number }, to: { address: string, port: number } };
-    unix?: { from: number, to: number }
+    type: string;
 }
 
-function isStraceFdType(object) {
-    return 'fd' in object && ('path' in object || 'net' in object);
-}
-// 2<UNIX:[3196613->3196612]>
-function parse_strace_unix_fd(raw: string): StraceFdType | null {
-    const reg = /^(?<fd>[0-9]+)\<UNIX:\[(?<from>[0-9]+)->(?<to>[0-9]+)\]\>$/
+function parse_strace_fd(raw: string): StraceFdType | undefined {
+    const reg = /^(?<fd>-?[0-9]+)<(?<type>.*):\[(?<params>.*)\]>$/;
     const res = reg.exec(raw);
     if (!res) {
-        return null;
+        return undefined;
     }
-    const group = res.groups;
-    if (!group) {
-        throw new Error('invalid strace tcp');
+    const groups = res.groups;
+    if (!groups) {
+        throw new Error('invalid fd');
     }
     return {
-        kind: 'UNIX',
-        fd: parseInt(group.fd, 10),
-        unix: { from: parseInt(group.from, 10), to: parseInt(group.to, 10) }
+        fd: parseInt(groups.fd, 10),
+        type: groups.type
     }
 }
-// 7<TCP:[127.0.0.1:8080->127.0.0.1:33980]>
-function parse_strace_tcp_fd(raw: string): StraceFdType | null {
-    const reg = /^(?<fd>[0-9]+)\<TCP:\[(?<from_address>[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):(?<from_port>[0-9]+)->(?<to_address>[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):(?<to_port>[0-9]+)\]\>$/
+
+function parse_strace_array_fd(raw: string): StraceFdType[] | undefined {
+    const reg = /^\[(?<fds>.*)\]$/;
     const res = reg.exec(raw);
     if (!res) {
-        return null;
+        return undefined;
     }
-    const group = res.groups;
-    if (!group) {
-        throw new Error('invalid strace tcp');
+    const groups = res.groups;
+    if (!groups) {
+        throw new Error('invalid fd');
     }
-    return {
-        kind: 'TCP',
-        fd: parseInt(group.fd, 10),
-        tcp: { from: { address: group.from_address, port: parseInt(group.from_port, 10) }, to: { address: group.to_address, port: parseInt(group.to_port, 10) } }
-    }
-}
-
-function parse_strace_any_fd(raw: string): StraceFdType | null {
-    const reg = /^(?<fd>[0-9]+)\<.*>$/
-    const res = reg.exec(raw);
-    if (!res) {
-        return null;
-    }
-    const group = res.groups;
-    if (!group) {
-        throw new Error('invalid strace tcp');
-    }
-    return {
-        kind: '???',
-        fd: parseInt(group.fd, 10),
-    }
-}
-
-
-function parse_strace_fd(raw: string): StraceFdType | null {
-    const parsers = [parse_strace_tcp_fd, parse_strace_unix_fd, parse_strace_any_fd]
-    for (const parser of parsers) {
-        const fd: StraceFdType | null = parser(raw);
-        if (fd) {
-            return fd;
-        }
-    }
-    return null;
+    console.log(groups.fds)
+    const elems = groups.fds.split(' ').map(parse_strace_fd)
+    if (elems.find((e) => e === undefined))
+        return undefined;
+    return elems.filter((e) => e !== undefined) as StraceFdType[];
 }
 
 type StraceStringType = {
     string: string;
     overflow: boolean;
 }
-function parse_strace_string(raw: string): StraceStringType {
+
+function parse_strace_string(raw: string): StraceStringType | undefined {
     if (raw.startsWith('"') && (raw.endsWith('"') || raw.endsWith('"...'))) {
         let s = raw;
         if (s.endsWith('"...')) {
@@ -85,14 +57,14 @@ function parse_strace_string(raw: string): StraceStringType {
             s = s.slice(1, -1);
         }
         return {
-            string: raw,
+            string: decodeStraceHexString(s),
             overflow: raw.endsWith('...')
         }
     }
-    throw new Error('invalid string');
+    return undefined;
 }
 
-type StraceDataType = null | string | number | boolean | StraceFdType | StraceStructureObject
+type StraceDataType = null | string | number | boolean | StraceFdType | StraceFdType[] | StraceStringType | StraceStructureObject
 type StraceStructureObject = { [key: string]: StraceParamType }
 
 type StraceReturnType = StraceDataType;
@@ -101,18 +73,41 @@ type StraceParamType = StraceDataType | StraceDataType[];
 interface StraceEntry {
     timestamp: number;
     address: number;
+    raw: string;
 }
 
 
-function parse_strace_data_type(raw): StraceDataType {
-    // parse int
-    if (raw.match(/^-*\d+$/))
+function parse_strace_number(raw: string): number | undefined {
+    if (raw.match(/^-?\d$/))
         return parseInt(raw, 10);
-    return null;
+    return undefined;
+}
+
+function parse_strace_null(raw: string): null | undefined {
+    if (raw.match(/^NULL$/))
+        return null
+    return undefined;
+}
+
+function parse_strace_data_type(raw): StraceDataType {
+    const parsers = [
+        parse_strace_number,
+        parse_strace_null,
+        parse_strace_string,
+        parse_strace_fd,
+        parse_strace_array_fd,
+    ];
+    for (const parser of parsers) {
+        const type = parser(raw);
+        if (type !== undefined) {
+            return type;
+        }
+    }
+    return raw;
 }
 
 function parse_strace_data_types(raw): StraceDataType[] {
-    return [];
+    return raw.split(', ').map(parse_strace_data_type);
 }
 
 interface StraceSyscallEntry extends StraceEntry {
@@ -121,21 +116,22 @@ interface StraceSyscallEntry extends StraceEntry {
     return: StraceReturnType;
 };
 
-function parse_strace_syscall_entry(raw: string): StraceSyscallEntry | null {
+function parse_strace_syscall_entry(raw: string): StraceSyscallEntry | undefined {
     const reg = /^(?<timestamp>\d+\.\d+) \[(?<address>[0-9A-Fa-f]+)\] (?<syscall>\w+)\((?<params>.*)\) = (?<return>.*)$/;
     const res = reg.exec(raw);
     if (!res) {
-        return null;
+        return undefined;
     }
     const groups = res.groups;
     if (!groups) {
         throw new Error('invalid syscall');
     }
     return {
+        raw,
         timestamp: parseFloat(groups.timestamp),
         address: parseInt(groups.address, 16),
         name: groups.syscall,
-        params: parse_strace_fd(groups.params),
+        params: parse_strace_data_types(groups.params),
         return: parse_strace_data_type(groups.return)
     };
 }
@@ -145,17 +141,18 @@ interface StraceExitEntry extends StraceEntry {
 };
 
 
-function parse_strace_exit_entry(raw: string): StraceExitEntry | null {
+function parse_strace_exit_entry(raw: string): StraceExitEntry | undefined {
     const reg = /^(?<timestamp>\d+\.\d+) \[(?<address>\?+)\] \+\+\+ (?<message>.*) \+\+\+$/;
     const res = reg.exec(raw);
     if (!res) {
-        return null;
+        return undefined;
     }
     const groups = res.groups;
     if (!groups) {
         throw new Error('invalid syscall');
     }
     return {
+        raw,
         timestamp: parseFloat(groups.timestamp),
         address: NaN,
         message: groups.message,
@@ -173,7 +170,7 @@ class StraceParser {
             parse_strace_exit_entry
         ]
         for (const parser of parsers) {
-            const entry: Entry | null = parser(raw);
+            const entry: Entry | undefined = parser(raw);
             if (entry) {
                 return entry;
             }
@@ -198,13 +195,27 @@ class StraceParser {
 export default StraceParser;
 
 import { spawn } from 'child_process'
+import { pipeline } from 'stream';
 
-async function main(binPath: string, args: string[]) {
-    const subprocess = await spawn('strace', ['-yy', '-e', 'verbose=all', '-i', '-ttt', '-v', '-xx', '-s', '0', binPath, ...args])
+// /*
+async function start(binPath: string, args: string[]) {
+    const subprocess = await spawn('strace', ['-yy', '-e', 'verbose=all', '-i', '-ttt', '-v', '-xx', '-s', '1024', binPath, ...args])
+    pipeline(process.stdin, subprocess.stdin);
+
     for await (const entry of StraceParser.parse_stream(subprocess.stderr)) {
-        console.log(entry);
+        console.log(subprocess.pid, entry);
         console.log();
     }
 }
+// */
 
-main('nc', ['-l', '8080']);
+async function main() {
+    console.log('start server')
+    start('nc', ['-l', '8080']);
+    console.log('wait')
+    await new Promise((resolve) => setTimeout(() => { resolve(null) }, 1000));
+    console.log('start client')
+    start('nc', ['127.0.0.1', '8080']);
+}
+
+main();
