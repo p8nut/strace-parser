@@ -36,7 +36,7 @@ function parse_strace_array_fd(raw: string): StraceFdType[] | undefined {
     if (!groups) {
         throw new Error('invalid fd');
     }
-    console.log(groups.fds)
+    // console.log(groups.fds)
     const elems = groups.fds.split(' ').map(parse_strace_fd)
     if (elems.find((e) => e === undefined))
         return undefined;
@@ -175,7 +175,7 @@ class StraceParser {
                 return entry;
             }
         }
-        console.log(raw)
+        /// console.log(raw)
         throw new Error('Unknown entry');
     }
 
@@ -199,17 +199,21 @@ import { pipeline } from 'stream';
 
 // /*
 async function start(binPath: string, args: string[]) {
-    const subprocess = await spawn('strace', ['-yy', '-e', 'verbose=all', '-i', '-ttt', '-v', '-xx', '-s', '1024', binPath, ...args])
-    pipeline(process.stdin, subprocess.stdin);
+    const subprocess = spawn('strace', ['-yy', '-e', 'verbose=all', '-i', '-ttt', '-v', '-xx', '-s', '1024', binPath, ...args], { stdio: ['inherit', 'inherit', 'pipe'] })
 
     for await (const entry of StraceParser.parse_stream(subprocess.stderr)) {
-        console.log(subprocess.pid, entry);
-        console.log();
+        console.error(subprocess.pid, entry);
+        console.error();
     }
+    return subprocess;
 }
 // */
 
 async function main() {
+    //console.log('start server')
+    //start('ls', ['-la', '.']);
+
+
     console.log('start server')
     start('nc', ['-l', '8080']);
     console.log('wait')
@@ -218,4 +222,4 @@ async function main() {
     start('nc', ['127.0.0.1', '8080']);
 }
 
-main();
+main().catch(console.error);
